@@ -101,7 +101,8 @@ def grouped_shuffle(inputs):
         outputs.append(inputs[idx][shuffle_indices, ...])
     return outputs
 
-
+# filelist="train_files.txt", read each .h5 file one by one
+# output: points and labels
 def load_cls(filelist):
     points = []
     labels = []
@@ -109,8 +110,9 @@ def load_cls(filelist):
     folder = os.path.dirname(filelist)
     for line in open(filelist):
         filename = os.path.basename(line.rstrip())
+        # read from .h5 file, e.g. filename = "ply_data_train0.h5"
         data = h5py.File(os.path.join(folder, filename))
-        if 'normal' in data:
+        if 'normal' in data: # for normal data, append into points by concatenating
             points.append(np.concatenate([data['data'][...], data['data'][...]], axis=-1).astype(np.float32))
         else:
             points.append(data['data'][...].astype(np.float32))
@@ -118,7 +120,8 @@ def load_cls(filelist):
     return (np.concatenate(points, axis=0),
             np.concatenate(labels, axis=0))
 
-
+# load data from list files, apply grouped_shuffle
+# output: data_train, label_train, data_val, label_val
 def load_cls_train_val(filelist, filelist_val):
     data_train, label_train = grouped_shuffle(load_cls(filelist))
     data_val, label_val = load_cls(filelist_val)

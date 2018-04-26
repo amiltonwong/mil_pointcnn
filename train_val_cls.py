@@ -20,42 +20,48 @@ from datetime import datetime
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--path', '-t', help='Path to data', required=True)
-    parser.add_argument('--path_val', '-v', help='Path to validation data')
+    parser.add_argument('--path', '-t', help='Path to data', required=True) # train_file.txt
+    parser.add_argument('--path_val', '-v', help='Path to validation data') # test_files.txt
     parser.add_argument('--load_ckpt', '-l', help='Path to a check point file for load')
-    parser.add_argument('--save_folder', '-s', help='Path to folder for saving check points and summary', required=True)
-    parser.add_argument('--model', '-m', help='Model to use', required=True)
-    parser.add_argument('--setting', '-x', help='Setting to use', required=True)
+    parser.add_argument('--save_folder', '-s', help='Path to folder for saving check points and summary', required=True) # ../../models/cls or seg
+    parser.add_argument('--model', '-m', help='Model to use', required=True) # pointcnn_cls or pointcnn_seg
+    parser.add_argument('--setting', '-x', help='Setting to use', required=True) # modelnet_x3_l4
     args = parser.parse_args()
 
     time_string = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+    # e.g. "pointcnn_cls_modelnet_x3_l4_6150_2018-04-25-11-43-14"
     root_folder = os.path.join(args.save_folder, '%s_%s_%d_%s' % (args.model, args.setting, os.getpid(), time_string))
     if not os.path.exists(root_folder):
         os.makedirs(root_folder)
-
+    # write the stdout to 'log.txt'
     sys.stdout = open(os.path.join(root_folder, 'log.txt'), 'w')
-
+    # write down PID
     print('PID:', os.getpid())
 
     print(args)
-
+    # use "import_module" to import from -m "pointcnn_cls", module in "pointcnn_cls.py" is imported
     model = importlib.import_module(args.model)
+    # "/data/code4/mil_pointcnn/pointcnn_cls" -> os.path.dirname(__file__), args.model="pointcnn_cls"
+    # setting_path = "/data/code4/mil_pointcnn/pointcnn_cls"
     setting_path = os.path.join(os.path.dirname(__file__), args.model)
-    sys.path.append(setting_path)
-    setting = importlib.import_module(args.setting)
+    sys.path.append(setting_path) # "/data/code4/mil_pointcnn/pointcnn_cls" path is added
+    setting = importlib.import_module(args.setting) # module in "modelnet_x3_l4.py" is imported
 
-    num_epochs = setting.num_epochs
-    batch_size = setting.batch_size
-    sample_num = setting.sample_num
-    step_val = setting.step_val
-    num_class = setting.num_class
-    rotation_range = setting.rotation_range
-    rotation_range_val = setting.rotation_range_val
-    jitter = setting.jitter
-    jitter_val = setting.jitter_val
+    num_epochs = setting.num_epochs # (modelnet_x3_l4): 2048
+    batch_size = setting.batch_size # (modelnet_x3_l4): 200
+    sample_num = setting.sample_num # (modelnet_x3_l4): 1024
+    step_val = setting.step_val # (modelnet_x3_l4): 500
+    num_class = setting.num_class # (modelnet_x3_l4): 40
+    rotation_range = setting.rotation_range # (modelnet_x3_l4): [0, math.pi, 0, 'u']
+    rotation_range_val = setting.rotation_range_val # (modelnet_x3_l4): rotation_range_val = [0, 0, 0, 'u']
+    jitter = setting.jitter # (modelnet_x3_l4): 0.0
+    jitter_val = setting.jitter_val # (modelnet_x3_l4): 0.0
 
     # Prepare inputs
     print('{}-Preparing datasets...'.format(datetime.now()))
+    # call "data_utils.load_cls_train_val()"
+    import data_utils # import from "data_utils.py"
+    data_train, label_train, data_val, label_val = data_utils.load_cls_train_val("../../data/modelnet/train_files.txt", "../../data/modelnet/test_files.txt")
     data_train, label_train, data_val, label_val = setting.load_fn(args.path, args.path_val)
 
     if setting.save_ply_fn is not None:
