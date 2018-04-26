@@ -63,23 +63,26 @@ def main():
     import data_utils # import from "data_utils.py"
     data_train, label_train, data_val, label_val = data_utils.load_cls_train_val("../../data/modelnet/train_files.txt", "../../data/modelnet/test_files.txt")
     data_train, label_train, data_val, label_val = setting.load_fn(args.path, args.path_val)
+    # data_train.shape = (9840, 2048, 6), label_train.shape = (9840,)
+    # data_val.shape = (2468, 2048, 6), label_val.shape = (2468,)
 
+    # when save_ply_fn is enabled
     if setting.save_ply_fn is not None:
-        folder = os.path.join(root_folder, 'pts')
+        folder = os.path.join(root_folder, 'pts') # create "pts" directory
         print('{}-Saving samples as .ply files to {}...'.format(datetime.now(), folder))
-        sample_num_for_ply = min(512, data_train.shape[0])
+        sample_num_for_ply = min(512, data_train.shape[0])  # save 512 samples
         if setting.map_fn is None:
-            data_sample = data_train[:sample_num_for_ply]
-        else:
+            data_sample = data_train[:sample_num_for_ply]  # sample the first 512 examples
+        else:  # when map_fn is enabled
             data_sample_list = []
             for idx in range(sample_num_for_ply):
                 data_sample_list.append(setting.map_fn(data_train[idx], 0)[0])
             data_sample = np.stack(data_sample_list)
         setting.save_ply_fn(data_sample, folder)
 
-    num_train = data_train.shape[0]
-    point_num = data_train.shape[1]
-    num_val = data_val.shape[0]
+    num_train = data_train.shape[0] # 9840
+    point_num = data_train.shape[1] # 2048 points
+    num_val = data_val.shape[0] # 2468
     print('{}-{:d}/{:d} training/validation samples.'.format(datetime.now(), num_train, num_val))
 
     ######################################################################
@@ -98,35 +101,38 @@ def main():
     handle = tf.placeholder(tf.string, shape=[])
 
     ######################################################################
+    # prepare for training dataset "dataset_train"
+    # Creates a `Dataset` dataset_train whose elements are slices of the given tensors.
     dataset_train = tf.data.Dataset.from_tensor_slices((data_train_placeholder, label_train_placeholder))
-    if setting.map_fn is not None:
+    if setting.map_fn is not None: # when map_fn is enabled
         dataset_train = dataset_train.map(lambda data, label: tuple(tf.py_func(
             setting.map_fn, [data, label], [tf.float32, label.dtype])), num_parallel_calls=setting.num_parallel_calls)
     dataset_train = dataset_train.shuffle(buffer_size=batch_size * 4)
 
-    if setting.keep_remainder:
-        dataset_train = dataset_train.batch(batch_size)
-        batch_num_per_epoch = math.ceil(num_train / batch_size)
+    if setting.keep_remainder: # enabled by default
+        dataset_train = dataset_train.batch(batch_size) # batch_size = 200
+        batch_num_per_epoch = math.ceil(num_train / batch_size)  # math.ceil(9840 / 200) = 50, run 50 batches to cover through training set
     else:
         dataset_train = dataset_train.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
         batch_num_per_epoch = math.floor(num_train / batch_size)
-    batch_num = batch_num_per_epoch * num_epochs
+    batch_num = batch_num_per_epoch * num_epochs # total number of batch needed, 50*2048 = 102,400
     print('{}-{:d} training batches.'.format(datetime.now(), batch_num))
 
-    dataset_train = dataset_train.repeat()
-    iterator_train = dataset_train.make_initializable_iterator()
+    dataset_train = dataset_train.repeat() # Repeats this dataset, for the elements to be repeated indefinitely.
+    iterator_train = dataset_train.make_initializable_iterator() # Creates an `Iterator` for enumerating the elements of this dataset.
 
+    # prepare for validation dataset "dataset_val"
     dataset_val = tf.data.Dataset.from_tensor_slices((data_val_placeholder, label_val_placeholder))
     if setting.map_fn is not None:
         dataset_val = dataset_val.map(lambda data, label: tuple(tf.py_func(
             setting.map_fn, [data, label], [tf.float32, label.dtype])), num_parallel_calls=setting.num_parallel_calls)
     if setting.keep_remainder:
-        dataset_val = dataset_val.batch(batch_size)
-        batch_num_val = math.ceil(num_val / batch_size)
+        dataset_val = dataset_val.batch(batch_size) # batch_size = 200
+        batch_num_val = math.ceil(num_val / batch_size) # math.ceil(2468 / 200) = 13, run 13 batches to cover through val set
     else:
         dataset_val = dataset_val.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
         batch_num_val = math.floor(num_val / batch_size)
-    iterator_val = dataset_val.make_initializable_iterator()
+    iterator_val = dataset_val.make_initializable_iterator() # Creates an `Iterator`
 
     iterator = tf.data.Iterator.from_string_handle(handle, dataset_train.output_types, dataset_train.output_shapes)
     (pts_fts, labels) = iterator.get_next()
