@@ -54,20 +54,38 @@ def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_tran
     else:
         return fts_conv_3d
 
+"""
+modelnet40
+x = 3 
+xconv_params = [dict(zip(xconv_param_name, xconv_param)) for xconv_param in
+                [(8, 1, -1, 16 * x, []),
+                 (12, 2, 384, 32 * x, []),
+                 (16, 2, 128, 64 * x, []),
+                 (16, 3, 128, 128 * x, [])]]
+                 
+fc_params = [dict(zip(fc_param_name, fc_param)) for fc_param in
+             [(128 * x, 0.0),
+              (64 * x, 0.5)]]    
+
+members:
+    layer_pts
+    layer_fts
+    
+"""
 
 class PointCNN:
     def __init__(self, points, features, num_class, is_training, setting, task):
         xconv_params = setting.xconv_params
         fc_params = setting.fc_params
-        with_X_transformation = setting.with_X_transformation
-        sorting_method = setting.sorting_method
-        N = tf.shape(points)[0]
-
-        if setting.sampling == 'fps':
+        with_X_transformation = setting.with_X_transformation # =True
+        sorting_method = setting.sorting_method # = None
+        N = tf.shape(points)[0] # number of points
+        # ModelNet40, setting.sampling = "random"
+        if setting.sampling == 'fps': #Furthest point sampling
             from sampling import tf_sampling
 
         self.layer_pts = [points]
-        if features is None:
+        if features is None: # by default
             self.layer_fts = [features]
         else:
             C_fts = xconv_params[0]['C'] // 2
@@ -75,12 +93,13 @@ class PointCNN:
             self.layer_fts = [features_hd]
 
         for layer_idx, layer_param in enumerate(xconv_params):
-            tag = 'xconv_' + str(layer_idx + 1) + '_'
-            K = layer_param['K']
-            D = layer_param['D']
-            P = layer_param['P']
-            C = layer_param['C']
-            links = layer_param['links']
+            tag = 'xconv_' + str(layer_idx + 1) + '_'   # xconv_1 , xconv_2, xconv_3
+            # Read xconv_params
+            K = layer_param['K'] # (8, 12, 16, 16)
+            D = layer_param['D'] # (1, 2, 1, 3)
+            P = layer_param['P'] # (-1, 384, 128, 128)
+            C = layer_param['C'] # (16*3, 32*3, 64*3, 128*3)
+            links = layer_param['links'] #([], [], [], [])
             if setting.sampling != 'random' and links:
                 print('Error: flexible links are supported only when random sampling is used!')
                 exit()

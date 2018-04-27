@@ -134,23 +134,32 @@ def main():
         batch_num_val = math.floor(num_val / batch_size)
     iterator_val = dataset_val.make_initializable_iterator() # Creates an `Iterator`
 
-    iterator = tf.data.Iterator.from_string_handle(handle, dataset_train.output_types, dataset_train.output_shapes)
-    (pts_fts, labels) = iterator.get_next()
+    # Creates a new, uninitialized `Iterator` based on the given handle
+    iterator = tf.data.Iterator.from_string_handle(string_handle=handle, output_types=dataset_train.output_types,
+                                                   output_shapes=dataset_train.output_shapes)
+    (pts_fts, labels) = iterator.get_next() # get a batch of points_features and labels
+    # pts_fts (?, 2048, 6)
+    # labels (?,)
 
     features_augmented = None
-    if setting.data_dim > 3:
+    if setting.data_dim > 3: # data_dim = 6
+        # split into points and features
         points, features = tf.split(pts_fts, [3, setting.data_dim - 3], axis=-1, name='split_points_features')
-        if setting.use_extra_features:
+        # points (?, 2048, 3), features (?, 2048, 3)
+        if setting.use_extra_features: # By default, use_extra_features = False
             features_sampled = tf.gather_nd(features, indices=indices, name='features_sampled')
             if setting.with_normal_feature:
                 features_augmented = pf.augment(features_sampled, rotations)
             else:
                 features_augmented = features_sampled
     else:
-        points = pts_fts
-    points_sampled = tf.gather_nd(points, indices=indices, name='points_sampled')
+        points = pts_fts # if data_dim is no greater than 3 dim, the features is only the position
+    # get sampled points
+    # Gather slices from "points" into a Tensor with shape specified by indices (None, None, 2)
+    points_sampled = tf.gather_nd(points, indices=indices, name='points_sampled') # indices: (None, None, 2)
+    # 把 points_sampled 乘上 xforms變換後，並添加jitter
     points_augmented = pf.augment(points_sampled, xforms, jitter_range)
-
+    # construct the net structure
     net = model.Net(points=points_augmented, features=features_augmented, num_class=num_class,
                     is_training=is_training, setting=setting)
     logits, probs = net.logits, net.probs
