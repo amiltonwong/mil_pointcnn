@@ -31,7 +31,7 @@ def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_tran
         nn_fts_from_prev = tf.gather_nd(fts, indices, name=tag + 'nn_fts_from_prev')
         nn_fts_input = tf.concat([nn_fts_from_pts, nn_fts_from_prev], axis=-1, name=tag + 'nn_fts_input')
 
-    if with_X_transformation:
+    if with_X_transformation:  # by default, = True
         ######################## X-transformation #########################
         X_0 = pf.conv2d(nn_pts_local, K * K, tag + 'X_0', is_training, (1, K))
         X_0_KK = tf.reshape(X_0, (N, P, K, K), name=tag + 'X_0_KK')
@@ -44,15 +44,21 @@ def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_tran
     else:
         fts_X = nn_fts_input
 
-    fts_conv = pf.separable_conv2d(fts_X, C, tag + 'fts_conv', is_training, (1, K), depth_multiplier=depth_multiplier)
-    fts_conv_3d = tf.squeeze(fts_conv, axis=2, name=tag + 'fts_conv_3d')
+    fts_conv = pf.separable_conv2d(input=fts_X, output=C, name=tag + 'fts_conv', is_training=is_training,
+                                   kernel_size=(1, K), depth_multiplier=depth_multiplier)
+    fts_conv_3d = tf.squeeze(fts_conv, axis=2, name=tag + 'fts_conv_3d') # turn it as compact tensor (dim-1 removed)
 
-    if with_global:
-        fts_global_0 = pf.dense(qrs, C // 4, tag + 'fts_global_0', is_training)
-        fts_global = pf.dense(fts_global_0, C // 4, tag + 'fts_global_', is_training)
+    if with_global: # when layer_idx == len(xconv_params) - 1 hence 4-1=3. At last layer, then apply "fts_global" on qrs
+        # densely-connected layer.
+        fts_global_0 = pf.dense(input=qrs, output=C // 4, name=tag + 'fts_global_0', is_training=is_training)
+        # densely-connected layer.
+        fts_global = pf.dense(input=fts_global_0, output=C // 4, name=tag + 'fts_global_', is_training=is_training)
+        # concat along the last dimension
         return tf.concat([fts_global, fts_conv_3d], axis=-1, name=tag + 'fts_conv_3d_with_global')
     else:
         return fts_conv_3d
+
+
 
 """
 modelnet40
@@ -62,6 +68,8 @@ xconv_params = [dict(zip(xconv_param_name, xconv_param)) for xconv_param in
                  (12, 2, 384, 32 * x, []),
                  (16, 2, 128, 64 * x, []),
                  (16, 3, 128, 128 * x, [])]]
+                 
+xconv_param            = [(8, 1, -1, 32), (12, 2, 384, 64), (16, 2, 128, 128), (16, 3, 128, 256)]
                  
 fc_params = [dict(zip(fc_param_name, fc_param)) for fc_param in
              [(128 * x, 0.0),
@@ -84,7 +92,7 @@ class PointCNN:
         if setting.sampling == 'fps': #Furthest point sampling
             from sampling import tf_sampling
 
-        self.layer_pts = [points]
+        self.layer_pts = [points] # assign input points as list, assigned to self.layer_pts
         if features is None: # by default
             self.layer_fts = [features]
         else:
@@ -96,7 +104,7 @@ class PointCNN:
             tag = 'xconv_' + str(layer_idx + 1) + '_'   # xconv_1 , xconv_2, xconv_3
             # Read xconv_params
             K = layer_param['K'] # (8, 12, 16, 16)
-            D = layer_param['D'] # (1, 2, 1, 3)
+            D = layer_param['D'] # (1, 2, 2, 3)
             P = layer_param['P'] # (-1, 384, 128, 128)
             C = layer_param['C'] # (16*3, 32*3, 64*3, 128*3)
             links = layer_param['links'] #([], [], [], [])
@@ -107,8 +115,9 @@ class PointCNN:
             # get k-nearest points
             pts = self.layer_pts[-1]
             fts = self.layer_fts[-1]
+            #                                current P == prev_layer P
             if P == -1 or (layer_idx > 0 and P == xconv_params[layer_idx - 1]['P']):
-                qrs = self.layer_pts[-1]
+                qrs = self.layer_pts[-1] # qrs?
             else:
                 if setting.sampling == 'fps':
                     indices = tf_sampling.farthest_point_sample(P, pts)
@@ -121,15 +130,16 @@ class PointCNN:
                 else:
                     print('Unknown sampling method!')
                     exit()
-            self.layer_pts.append(qrs)
+            self.layer_pts.append(qrs) # add qrs into layer_pts
 
             if layer_idx == 0:
-                C_pts_fts = C // 2 if fts is None else C // 4
-                depth_multiplier = 4
+                C_pts_fts = C // 2 if fts is None else C // 4 # by default, C_pts_fts = C // 2 = 48 // 2 = 24
+                depth_multiplier = 4  # What purpose?
             else:
-                C_prev = xconv_params[layer_idx - 1]['C']
+                C_prev = xconv_params[layer_idx - 1]['C'] # read C_prev param
                 C_pts_fts = C_prev // 4
                 depth_multiplier = math.ceil(C / C_prev)
+            # Apply X_transform on fts
             fts_xconv = xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_transformation,
                               depth_multiplier, sorting_method, layer_idx == len(xconv_params) - 1)
             fts_list = []
