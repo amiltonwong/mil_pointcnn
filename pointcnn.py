@@ -116,8 +116,9 @@ def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_tran
 
     if with_global: # when layer_idx == len(xconv_params) - 1 hence 4-1=3. At last layer, then apply "fts_global" on qrs
         # densely-connected layer.
+        # number of channels of output layer is  C//4 ?
         fts_global_0 = pf.dense(input=qrs, output=C // 4, name=tag + 'fts_global_0', is_training=is_training)
-        # densely-connected layer.
+        # densely-connected layer. (2nd)
         fts_global = pf.dense(input=fts_global_0, output=C // 4, name=tag + 'fts_global_', is_training=is_training)
         # concat along the last dimension
         return tf.concat([fts_global, fts_conv_3d], axis=-1, name=tag + 'fts_conv_3d_with_global')
@@ -181,33 +182,42 @@ class PointCNN:
             # get k-nearest points
             pts = self.layer_pts[-1]
             fts = self.layer_fts[-1]
+            # P: number of output (representative) points
             #                                current P == prev_layer P
             if P == -1 or (layer_idx > 0 and P == xconv_params[layer_idx - 1]['P']):
-                qrs = self.layer_pts[-1] # qrs?
+                qrs = self.layer_pts[-1] # qrs: representative points
             else:
+                # By default,  ModelNet40, setting.sampling = "random"
                 if setting.sampling == 'fps':
+                    # use farthest_point_sampling to sample P個 representative points
                     indices = tf_sampling.farthest_point_sample(P, pts)
+                    # gather sampling points into representative points in position coordinate
                     qrs = tf_sampling.gather_point(pts, indices)  # (N,P,3)
                 elif setting.sampling == 'ids':
                     indices = pf.inverse_density_sampling(pts, K, P)
                     qrs = tf.gather_nd(pts, indices)
-                elif setting.sampling == 'random':
+                elif setting.sampling == 'random': # byu default, use "random"
+                    # slice the P個 representative points
                     qrs = tf.slice(pts, (0, 0, 0), (-1, P, -1), name=tag + 'qrs')  # (N, P, 3)
                 else:
                     print('Unknown sampling method!')
                     exit()
-            self.layer_pts.append(qrs) # add qrs into layer_pts
+            self.layer_pts.append(qrs) # add qrs "representative points" into layer_pts
 
-            if layer_idx == 0:
+            if layer_idx == 0: # For the first layer
+                # C_pts_fts, number of channels of point's feature, C_delta in paper
+                # 取 C 的1/2, 或1/4
                 C_pts_fts = C // 2 if fts is None else C // 4 # by default, C_pts_fts = C // 2 = 48 // 2 = 24
                 depth_multiplier = 4  # What purpose?
             else:
+                # 取前一層的channel數
                 C_prev = xconv_params[layer_idx - 1]['C'] # read C_prev param
+                # 取前一層的channel數的1/4 作為C_delta
                 C_pts_fts = C_prev // 4
                 depth_multiplier = math.ceil(C / C_prev)
-            # Apply X_transform on fts
+            #### Apply X_transform on fts
             fts_xconv = xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_transformation,
-                              depth_multiplier, sorting_method, layer_idx == len(xconv_params) - 1)
+                              depth_multiplier, sorting_method, layer_idx == len(xconv_params) - 1) # "layer_idx == len(xconv_params) - 1" 作為with_global的依據
             fts_list = []
             for link in links:  # link = edge?
                 fts_from_link = self.layer_fts[link]
@@ -217,6 +227,7 @@ class PointCNN:
                     C_forward = math.ceil(fts_slice.get_shape().as_list()[-1] / (-link))
                     fts_forward = pf.dense(fts_slice, C_forward, tag + 'fts_forward_' + str(-link), is_training)
                     fts_list.append(fts_forward)
+
             if fts_list:
                 fts_list.append(fts_xconv)
                 self.layer_fts.append(tf.concat(fts_list, axis=-1, name=tag + 'fts_list_concat'))
@@ -248,16 +259,22 @@ class PointCNN:
                 self.layer_fts.append(fts_fuse)
 
         self.fc_layers = [self.layer_fts[-1]]
+        # fc_params:
+        #     [(128 * x, 0.0),
+        #      (64 * x, 0.5)]], use dropout
         for layer_idx, layer_param in enumerate(fc_params):
             C = layer_param['C']
             dropout_rate = layer_param['dropout_rate']
-            fc = pf.dense(self.fc_layers[-1], C, 'fc{:d}'.format(layer_idx), is_training)
+            fc = pf.dense(input=self.fc_layers[-1], output=C, name='fc{:d}'.format(layer_idx), is_training=is_training)
+            # use dropout
             fc_drop = tf.layers.dropout(fc, dropout_rate, training=is_training, name='fc{:d}_drop'.format(layer_idx))
             self.fc_layers.append(fc_drop)
 
         if task == 'classification':
             fc_mean = tf.reduce_mean(self.fc_layers[-1], axis=1, keep_dims=True, name='fc_mean')
+            # Return `true_fn()` if the predicate `pred` is true else `false_fn()`
             self.fc_layers[-1] = tf.cond(is_training, lambda: self.fc_layers[-1], lambda: fc_mean)
-
+        # compute logits
         self.logits = pf.dense(self.fc_layers[-1], num_class, 'logits', is_training, with_bn=False, activation=None)
+        # compute probs.
         self.probs = tf.nn.softmax(self.logits, name='probs')
