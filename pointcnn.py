@@ -24,11 +24,11 @@ input:
     qrs: representative points / ? receptive field of representative points
     K: nunmber of neighboring points around representative point by K-Nearest Neighbors search
      `size of trainable tensor (kernel weights)
-    N: number of output representative points
-    P: 
+    N: batch size
+    P: number of output (representative) points
     D: dilation rate
     C: channels of output feature, equals to C_2 in paper
-    C_pts_fts: channels of output feature, equals to C_delta + C_1 in paper
+    C_pts_fts: channels of point's feature, C_delta in paper
     is_training:
     with_X_transformation:
     depth_multiplier: used in separable_convolution
