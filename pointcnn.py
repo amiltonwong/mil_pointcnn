@@ -6,11 +6,44 @@ import math
 import pointfly as pf
 import tensorflow as tf
 
+"""
+1. Move P to local coordinate of system of p.
+2. Indiviually lift each point into C_delta dim. space.
+3. Concatenate F_delta and F into F_*, which is a K X (C_delta + C1) matrix
+4. Learn the K x K X-transformation matrix
+5. Weight and permute F_* with the learnt X-transformation into F_X (X-transformed feature matrix of input neighborhood points)
+6. Finally, typical convolution between K and F_X
+"""
 
+
+""" 
+core layer: X-conv (X_-transformation + Conv layer)
+input: 
+    pts: input points, (neighborhood) point matrix
+    fts: input point features, (neighborhood point) feature matrix
+    qrs: representative points / ? receptive field of representative points
+    K: nunmber of neighboring points around representative point by K-Nearest Neighbors search
+     `size of trainable tensor (kernel weights)
+    N: number of output representative points
+    P: 
+    D: dilation rate
+    C: channels of output feature, equals to C_2 in paper
+    C_pts_fts: channels of output feature, equals to C_delta + C_1 in paper
+    is_training:
+    with_X_transformation:
+    depth_multiplier: used in separable_convolution
+    sorting_method: not yet implemented 
+    with_global: true/false
+
+output:
+    fts_conv_3d feature map
+
+"""
 def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_transformation, depth_multiplier,
           sorting_method=None, with_global=False):
     if D == 1:
-        _, indices = pf.knn_indices_general(qrs, pts, K, True)
+        # use K-Nearest Neighbors search to find K neighboring points
+        _, indices = pf.knn_indices_general(qrs, pts, K, True)  # return shape is (N, P, K, 2)
     else:
         _, indices_dilated = pf.knn_indices_general(qrs, pts, K * D, True)
         indices = indices_dilated[:, :, ::D, :]
@@ -19,7 +52,10 @@ def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_tran
         indices = pf.sort_points(pts, indices, sorting_method)
 
     nn_pts = tf.gather_nd(pts, indices, name=tag + 'nn_pts')  # (N, P, K, 3)
+
     nn_pts_center = tf.expand_dims(qrs, axis=2, name=tag + 'nn_pts_center')  # (N, P, 1, 3)
+    # Move (neighborhood) point matrix to local coordinate system of representative point
+    # nn_pts_local : local coordinate of w.r.t representative points : PointMatrixlocal <- PointMatrix -
     nn_pts_local = tf.subtract(nn_pts, nn_pts_center, name=tag + 'nn_pts_local')  # (N, P, K, 3)
 
     # Prepare features to be transformed
@@ -143,7 +179,7 @@ class PointCNN:
             fts_xconv = xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_transformation,
                               depth_multiplier, sorting_method, layer_idx == len(xconv_params) - 1)
             fts_list = []
-            for link in links:
+            for link in links:  # link = edge?
                 fts_from_link = self.layer_fts[link]
                 if fts_from_link is not None:
                     fts_slice = tf.slice(fts_from_link, (0, 0, 0), (-1, P, -1),
