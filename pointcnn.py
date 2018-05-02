@@ -27,8 +27,8 @@ input:
     N: batch size
     P: number of output (representative) points
     D: dilation rate
-    C: channels of output feature, equals to C_2 in paper
-    C_pts_fts: channels of point's feature, C_delta in paper
+    C: number of channels of output feature, equals to C_2 in paper
+    C_pts_fts: number of channels of point's feature, C_delta in paper
     is_training:
     with_X_transformation:
     depth_multiplier: used in separable_convolution
@@ -41,47 +41,77 @@ output:
 """
 def xconv(pts, fts, qrs, tag, N, K, D, P, C, C_pts_fts, is_training, with_X_transformation, depth_multiplier,
           sorting_method=None, with_global=False):
-    if D == 1:
+    if D == 1: # no dilation
         # use K-Nearest Neighbors search to find K neighboring points
-        _, indices = pf.knn_indices_general(qrs, pts, K, True)  # return shape is (N, P, K, 2)
-    else:
-        _, indices_dilated = pf.knn_indices_general(qrs, pts, K * D, True)
+        # qrs : output representative points, pts : input points, K neighboring points
+        _, indices = pf.knn_indices_general(queries=qrs, points=pts, k=K, sort=True)  # return shape is (N, P, K, 2)
+    else: # with dilation
+        _, indices_dilated = pf.knn_indices_general(queries=qrs, points=pts, k=K * D, sort=True)
         indices = indices_dilated[:, :, ::D, :]
 
-    if sorting_method is not None:
+    # indices: sampled K neigboring points, shape is (N, P, K, 2). If dilation enabled, increase multiple of D
+
+    if sorting_method is not None: # by default, no sorting method
         indices = pf.sort_points(pts, indices, sorting_method)
 
-    nn_pts = tf.gather_nd(pts, indices, name=tag + 'nn_pts')  # (N, P, K, 3)
-
+    # "Gather slices from `params` into a Tensor with shape specified by `indices`
+    # nn_pts: P個 representative points, K個 neigboring points
+    nn_pts = tf.gather_nd(params=pts, indices=indices, name=tag + 'nn_pts')  # (N, P, K, 3)
+    # nn_pts_center: representatives ponts, used as to convert to local coordinates
     nn_pts_center = tf.expand_dims(qrs, axis=2, name=tag + 'nn_pts_center')  # (N, P, 1, 3)
     # Move (neighborhood) point matrix to local coordinate system of representative point
-    # nn_pts_local : local coordinate of w.r.t representative points : PointMatrixlocal <- PointMatrix -
+    # nn_pts_local : local coordinate  w.r.t representative points : PointMatrixlocal <- PointMatrix - RepresentativePoint
+    # P' <= P - p, in paper
     nn_pts_local = tf.subtract(nn_pts, nn_pts_center, name=tag + 'nn_pts_local')  # (N, P, K, 3)
+    # end of "1. Move P to local coordinate of system of p."
 
-    # Prepare features to be transformed
+
+    # Prepare features to be transformed.
+    # "2. Indiviually lift each point into C_delta dim. space." by using MLP_delta()
+    # MLP_delta(P − p)
+    # C_pts_fts: C_delta in paper
     nn_fts_from_pts_0 = pf.dense(nn_pts_local, C_pts_fts, tag + 'nn_fts_from_pts_0', is_training)
+    # 2nd lifting
     nn_fts_from_pts = pf.dense(nn_fts_from_pts_0, C_pts_fts, tag + 'nn_fts_from_pts', is_training)
-    if fts is None:
+    # end of obtaining F_delta
+
+    if fts is None: # if features matrix "F" is none, pass F_delta to fts
         nn_fts_input = nn_fts_from_pts
     else:
+        # nn_fts_from_prev: F
         nn_fts_from_prev = tf.gather_nd(fts, indices, name=tag + 'nn_fts_from_prev')
+        # 3. Concatenate F_delta and F into F_*, which is a K X (C_delta + C1) matrix
+        # nn_fts_from_pts: F_delta,   nn_fts_from_prev: F,  nn_fts_input: F_*
         nn_fts_input = tf.concat([nn_fts_from_pts, nn_fts_from_prev], axis=-1, name=tag + 'nn_fts_input')
 
+    # 4. Learn the K x K X-transformation matrix
+    # MLP(P − p)
     if with_X_transformation:  # by default, = True
         ######################## X-transformation #########################
-        X_0 = pf.conv2d(nn_pts_local, K * K, tag + 'X_0', is_training, (1, K))
+        # nn_pts_local.shape = (N, P, K, 3), perform general convolution
+        X_0 = pf.conv2d(input=nn_pts_local, output=K * K, name=tag + 'X_0', is_training=is_training, kernel_size=(1, K))
+        # reshape to (N, P, K, K)
         X_0_KK = tf.reshape(X_0, (N, P, K, K), name=tag + 'X_0_KK')
-        X_1 = pf.depthwise_conv2d(X_0_KK, K, tag + 'X_1', is_training, (1, K))
+        # perform separable convolution
+        X_1 = pf.depthwise_conv2d(input=X_0_KK, depth_multiplier=K, name=tag + 'X_1', is_training=is_training, kernel_size=(1, K))
+        # reshape to (N, P, K, K)
         X_1_KK = tf.reshape(X_1, (N, P, K, K), name=tag + 'X_1_KK')
-        X_2 = pf.depthwise_conv2d(X_1_KK, K, tag + 'X_2', is_training, (1, K), activation=None)
+        # perform separable convolution, no activation function applied
+        X_2 = pf.depthwise_conv2d(input=X_1_KK, depth_multiplier=K, name=tag + 'X_2', is_training=is_training, kernel_size=(1, K), activation=None)
+        # reshape to (N, P, K, K), X_2_KK : X
         X_2_KK = tf.reshape(X_2, (N, P, K, K), name=tag + 'X_2_KK')
+        # 5. Weight and permute F_* with the learnt X-transformation (X) into F_X,  fts_X: F_X
+        # F_X <= X x F_*
+        # MLP(P − p) x [MLP_delta(P − p), F]
         fts_X = tf.matmul(X_2_KK, nn_fts_input, name=tag + 'fts_X')
         ###################################################################
     else:
-        fts_X = nn_fts_input
-
+        fts_X = nn_fts_input  # use F_*
+    # 6. Finally, typical convolution between Kernel and transformed feature matrix: F_X
+    # fts_conv: features after X-conv layer
     fts_conv = pf.separable_conv2d(input=fts_X, output=C, name=tag + 'fts_conv', is_training=is_training,
                                    kernel_size=(1, K), depth_multiplier=depth_multiplier)
+    # Removes dimensions of size 1
     fts_conv_3d = tf.squeeze(fts_conv, axis=2, name=tag + 'fts_conv_3d') # turn it as compact tensor (dim-1 removed)
 
     if with_global: # when layer_idx == len(xconv_params) - 1 hence 4-1=3. At last layer, then apply "fts_global" on qrs

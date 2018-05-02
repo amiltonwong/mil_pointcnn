@@ -134,11 +134,14 @@ def knn_indices(points, k, sort=True):
 
 
 # return shape is (N, P, K, 2)
+# N:batchsize, find K neighboring points for each representative points (P個)
+# queries: representative points
+# points: input points, K neighboring points
 def knn_indices_general(queries, points, k, sort=True):
-    queries_shape = tf.shape(queries)
-    batch_size = queries_shape[0]
-    point_num = queries_shape[1]
-
+    queries_shape = tf.shape(queries) # get shape of representative points
+    batch_size = queries_shape[0] # N = batch_size
+    point_num = queries_shape[1] # num of representative points
+    # compute distance matrix, D shape is (N, P_A, P_B) => (N, P, K)
     D = batch_distance_matrix_general(queries, points)
     distances, point_indices = tf.nn.top_k(-D, k=k, sorted=sort)  # (N, P, K)
     batch_indices = tf.tile(tf.reshape(tf.range(batch_size), (-1, 1, 1, 1)), (1, point_num, k, 1))

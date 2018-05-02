@@ -159,7 +159,10 @@ def main():
     points_sampled = tf.gather_nd(points, indices=indices, name='points_sampled') # indices: (None, None, 2)
     # 把 points_sampled 乘上 xforms變換後，並添加jitter
     points_augmented = pf.augment(points_sampled, xforms, jitter_range)
-    # construct the net structure
+
+
+    # Construct the net structure
+    # def __init__(self, points, features, num_class, is_training, setting, task="classification")
     net = model.Net(points=points_augmented, features=features_augmented, num_class=num_class,
                     is_training=is_training, setting=setting)
     logits, probs = net.logits, net.probs
